@@ -1,7 +1,5 @@
-use baseview::dpi::{LogicalSize, Size};
-use egui::Context;
-use egui::{FullOutput, TextureOptions, widgets::color_picker::show_color, *};
-use egui_baseview::{EguiWindow, EguiWindowSettings, ExtraOutputCommands};
+use egui::{TextureOptions, widgets::color_picker::show_color, *};
+use egui_baseview::{EguiWindow, EguiWindowSettings, Frame, baseview::dpi::LogicalSize};
 use std::collections::HashMap;
 
 const GRADIENT_SIZE: Vec2 = vec2(256.0, 18.0);
@@ -13,13 +11,13 @@ const TRANSPARENT: Color32 = Color32::TRANSPARENT;
 const WHITE: Color32 = Color32::WHITE;
 
 /// A test for sanity-checking and diagnosing egui rendering backends.
-pub struct ColorTest {
+pub struct RenderTest {
     tex_mngr: TextureManager,
     vertex_gradients: bool,
     texture_gradients: bool,
 }
 
-impl Default for ColorTest {
+impl Default for RenderTest {
     fn default() -> Self {
         Self {
             tex_mngr: Default::default(),
@@ -29,8 +27,18 @@ impl Default for ColorTest {
     }
 }
 
-impl ColorTest {
-    pub fn ui(&mut self, ui: &mut Ui) {
+impl egui_baseview::App for RenderTest {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut Frame) {
+        egui::Window::new("rendering test")
+            .scroll(true)
+            .show(ui.ctx(), |ui| {
+                self.inner_ui(ui);
+            });
+    }
+}
+
+impl RenderTest {
+    fn inner_ui(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.label("This is made to test that the egui rendering backend is set up correctly.");
             ui.add(egui::Label::new("❓").sense(egui::Sense::click()))
@@ -649,24 +657,16 @@ fn lerp_color_gamma(left: Color32, right: Color32, t: f32) -> Color32 {
 }
 
 fn main() {
-    let state = ColorTest::default();
-
-    EguiWindow::open_blocking(
+    EguiWindow::create(
         EguiWindowSettings::new()
-            .with_tile("egui-baseview render test")
-            .with_size(Size::Logical(LogicalSize {
+            .with_title("egui-baseview render test")
+            .with_size(LogicalSize {
                 width: 1280.0,
                 height: 720.0,
-            })),
-        state,
-        |_egui_ctx: &Context, _commands: &mut ExtraOutputCommands, _state: &mut ColorTest| {},
-        |_output: &FullOutput, _viewport_output: &ViewportOutput, _state: &mut ColorTest| {},
-        |ui: &mut Ui, _commands: &mut ExtraOutputCommands, state: &mut ColorTest| {
-            egui::Window::new("rendering test")
-                .scroll(true)
-                .show(ui.ctx(), |ui| {
-                    state.ui(ui);
-                });
-        },
-    );
+            }),
+        RenderTest::default(),
+    )
+    .unwrap()
+    .run_until_closed()
+    .unwrap();
 }

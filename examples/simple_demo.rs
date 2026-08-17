@@ -1,65 +1,88 @@
-use baseview::dpi::{LogicalSize, Size};
-use egui::{CentralPanel, Context, FullOutput, Ui, ViewportOutput};
-use egui_baseview::{EguiWindow, EguiWindowSettings, ExtraOutputCommands};
+use baseview::WindowSize;
+use egui::CentralPanel;
+use egui_baseview::{
+    EguiWindow, EguiWindowSettings, Frame, RepaintNotifier,
+    baseview::{HandlerError, dpi::LogicalSize},
+};
 
 fn main() {
-    let state = State::new();
+    // A realtime-safe handle to request a repaint & update for an egui app.
+    //
+    // This can be used, for example, to notify the GUI that the value of a decibel
+    // meter has changed.
+    let repaint_notifier = RepaintNotifier::new();
 
-    EguiWindow::open_blocking(
+    EguiWindow::create(
         EguiWindowSettings::new()
-            .with_tile("egui-baseview simple demo")
-            .with_size(Size::Logical(LogicalSize {
+            .with_title("egui-baseview simple demo")
+            .with_size(LogicalSize {
                 width: 400.0,
                 height: 200.0,
-            })),
-        state,
-        // Called once before the first frame. Allows you to do setup code and to
-        // call `ctx.set_fonts()`. Optional.
-        |_egui_ctx: &Context, _commands: &mut ExtraOutputCommands, _state: &mut State| {},
-        // Called after each `update`. Can be used to read egui's output commands to
-        // perform actions, i.e. asking the host to resize the window if a command to
-        // resize the window is present. Optional.
-        |_output: &FullOutput, _viewport_output: &ViewportOutput, _state: &mut State| {},
-        // Called before each frame. Here you should update the state of your
-        // application and build the UI.
-        |ui: &mut Ui, _commands: &mut ExtraOutputCommands, state: &mut State| {
-            CentralPanel::default().show(ui, |ui| {
-                ui.heading("My Egui Application");
-                ui.horizontal(|ui| {
-                    ui.label("Your name: ");
-                    ui.text_edit_singleline(&mut state.name);
-                });
-                ui.add(egui::Slider::new(&mut state.age, 0..=120).text("age"));
-                if ui.button("Click each year").clicked() {
-                    state.age += 1;
-                }
-                ui.label(format!("Hello '{}', age {}", state.name, state.age));
-                if ui.button("close window").clicked() {
-                    ui.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-
-                ui.hyperlink_to("free crouton", "https://crouton.net");
-            });
-        },
-    );
+            })
+            // A custom zoom factor can be set here. (The zoom factor can also be
+            // changed later with `egui_ctx.set_zoom_factor()`.)
+            .with_zoom_factor(1.0)
+            .with_repaint_notifier(repaint_notifier.clone()),
+        MyApp::new(),
+    )
+    .unwrap()
+    .run_until_closed()
+    .unwrap();
 }
 
-struct State {
+struct MyApp {
     pub name: String,
     pub age: u32,
 }
 
-impl State {
-    pub fn new() -> State {
-        State {
+impl MyApp {
+    pub fn new() -> MyApp {
+        MyApp {
             name: String::from(""),
             age: 30,
         }
     }
 }
 
-impl Drop for State {
-    fn drop(&mut self) {
-        println!("Window is closing!");
+impl egui_baseview::App for MyApp {
+    /// Called once before the first frame. Setup code such as `egui_ctx.set_fonts()`
+    /// can be done here.
+    ///
+    /// If an error is returned, then the window will be closed.
+    fn build(&mut self, _egui_ctx: egui::Context, _frame: &mut Frame) -> Result<(), HandlerError> {
+        Ok(())
+    }
+
+    /// Called each time the UI needs repainting, which may be many times per second.
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut Frame) {
+        CentralPanel::default().show(ui, |ui| {
+            ui.heading("My Egui Application");
+            ui.horizontal(|ui| {
+                ui.label("Your name: ");
+                ui.text_edit_singleline(&mut self.name);
+            });
+            ui.add(egui::Slider::new(&mut self.age, 0..=120).text("age"));
+            if ui.button("Click each year").clicked() {
+                self.age += 1;
+            }
+            ui.label(format!("Hello '{}', age {}", self.name, self.age));
+            if ui.button("close window").clicked() {
+                ui.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+
+            ui.hyperlink_to("free crouton", "https://crouton.net");
+        });
+    }
+
+    /// Called when the window has been resized.
+    ///
+    /// The given size takes the zoom factor into account.
+    fn resized(&mut self, size: WindowSize) {
+        let _ = size;
+    }
+
+    /// Called when the zoom factor has changed.
+    fn zoom_factor_changed(&mut self, zoom_factor: f32) {
+        let _ = zoom_factor;
     }
 }
