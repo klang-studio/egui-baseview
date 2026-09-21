@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use baseview::dpi::{LogicalPosition, LogicalSize, Size};
@@ -335,7 +335,6 @@ pub struct EguiWindow<A: App> {
     zoom_factor: Cell<f32>,
     pointer_logical_pos: Cell<Option<egui::Pos2>>,
     current_cursor_icon: Cell<baseview::MouseCursor>,
-    repaint_after: Arc<Mutex<Option<Instant>>>,
     repaint_notifier: Option<RepaintNotifier>,
     modifiers: Cell<egui::Modifiers>,
 
@@ -359,22 +358,12 @@ impl<A: App> EguiWindow<A> {
 
         egui_ctx.set_zoom_factor(zoom_factor);
 
-        let repaint_after = Arc::new(Mutex::new(Some(Instant::now())));
-        let repaint_after_2 = Arc::clone(&repaint_after);
-        egui_ctx.set_request_repaint_callback(move |request_repaint_info| {
-            let repaint_instant = Instant::now() + request_repaint_info.delay;
-
-            let mut repaint_after = repaint_after_2.lock().unwrap();
-            let repaint_after = &mut *repaint_after;
-
-            if let Some(repaint_after) = repaint_after.as_mut() {
-                if repaint_instant < *repaint_after {
-                    *repaint_after = repaint_instant;
-                }
-            } else {
-                *repaint_after = Some(repaint_instant);
-            }
-        });
+        {
+            let waker = window.waker();
+            egui_ctx.set_request_repaint_callback(move |request_repaint_info| {
+                waker.request_redraw_after(request_repaint_info.delay)
+            });
+        }
 
         let size = window.size();
 
@@ -438,7 +427,6 @@ impl<A: App> EguiWindow<A> {
             current_cursor_icon: baseview::MouseCursor::Default.into(),
             system_scale_factor: system_scale_factor.into(),
             zoom_factor: zoom_factor.into(),
-            repaint_after,
             window,
             repaint_notifier,
             modifiers: Cell::new(egui::Modifiers::default()),
@@ -533,29 +521,15 @@ fn update_modifiers(
 }
 
 impl<A: App> WindowHandler for EguiWindow<A> {
-    fn on_frame(&self) -> Result<(), HandlerError> {
-        let mut do_repaint_now = if let Some(repaint_notifier) = &self.repaint_notifier {
-            repaint_notifier.repaint_requested()
-        } else {
-            false
-        };
-
+    fn poll(&self) {
+        if let Some(repaint_notifier) = &self.repaint_notifier
+            && repaint_notifier.repaint_requested()
         {
-            let mut repaint_after = self.repaint_after.lock().unwrap();
-            let repaint_after = &mut *repaint_after;
-
-            if let Some(instant) = &repaint_after
-                && Instant::now() >= *instant
-            {
-                do_repaint_now = true;
-                *repaint_after = None;
-            }
+            self.window.request_redraw();
         }
+    }
 
-        if !do_repaint_now {
-            return Ok(());
-        }
-
+    fn draw(&self) -> Result<(), HandlerError> {
         let (egui_input, logical_size) = {
             let mut egui_input = self.egui_input.borrow_mut();
             egui_input.time = Some(self.start_time.elapsed().as_secs_f64());
@@ -731,8 +705,6 @@ impl<A: App> WindowHandler for EguiWindow<A> {
         self.system_scale_factor.set(new_size.scale_factor);
 
         let mut inner = self.inner.borrow_mut();
-
-        inner.egui_ctx.request_repaint();
 
         inner.user_app.resized(WindowSize {
             physical: new_size.physical,
@@ -917,9 +889,6 @@ impl<A: App> WindowHandler for EguiWindow<A> {
                         .get_mut(&self.viewport_id)
                         .unwrap()
                         .focused = Some(true);
-
-                    *self.repaint_after.lock().unwrap() = Some(Instant::now());
-                    self.inner.borrow().egui_ctx.request_repaint();
                 }
                 baseview::WindowEvent::Unfocused => {
                     egui_input.events.push(egui::Event::WindowFocused(false));
@@ -936,7 +905,7 @@ impl<A: App> WindowHandler for EguiWindow<A> {
         }
 
         if do_repaint {
-            self.inner.borrow().egui_ctx.request_repaint();
+            self.window.request_redraw();
         }
 
         // For keyboard events, also check if egui actually wants keyboard input
