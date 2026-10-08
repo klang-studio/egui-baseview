@@ -676,7 +676,7 @@ impl<A: App> WindowHandler for EguiWindow<A> {
             if !full_output.platform_output.events.is_empty()
                 || full_output.platform_output.ime.is_some()
             {
-                window.focus();
+                self.window.focus();
             }
         }
 
