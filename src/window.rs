@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use baseview::dpi::{LogicalPosition, LogicalSize, Size};
 use baseview::{
-    Event, EventStatus, HandlerError, ParentWindowHandle, Window, WindowContext, WindowHandler,
+    DropData, DropEffect, Event, EventStatus, HandlerError, ParentWindowHandle, Window, WindowContext, WindowHandler,
     WindowSettings, WindowSize,
 };
 use copypasta::ClipboardProvider;
@@ -346,6 +346,14 @@ pub struct EguiWindow<A: App> {
 }
 
 impl<A: App> EguiWindow<A> {
+    /// A drag position in egui's logical points, like `CursorMoved`. (Klopfer patch)
+    fn drag_pos(&self, position: &baseview::dpi::PhysicalPosition<f64>) -> Pos2 {
+        let logical_pos: LogicalPosition<f32> = position.to_logical(
+            self.system_scale_factor.get() * self.inner.borrow().egui_ctx.zoom_factor() as f64,
+        );
+        pos2(logical_pos.x, logical_pos.y)
+    }
+
     fn new(
         window: WindowContext,
         title: String,
@@ -761,6 +769,8 @@ impl<A: App> WindowHandler for EguiWindow<A> {
         let mut egui_input = self.egui_input.borrow_mut();
 
         let mut do_repaint = true;
+        // Klopfer patch: set when dragged files are over the window
+        let mut accept_drop = None;
 
         match &event {
             baseview::Event::Mouse(event) => match event {
@@ -843,6 +853,57 @@ impl<A: App> WindowHandler for EguiWindow<A> {
                 baseview::MouseEvent::CursorLeft => {
                     self.pointer_logical_pos.set(None);
                     egui_input.events.push(egui::Event::PointerGone);
+                }
+                // File drag and drop (Klopfer patch): forwarded as egui's hovered/dropped files
+                baseview::MouseEvent::DragEntered {
+                    position,
+                    modifiers,
+                    data,
+                }
+                | baseview::MouseEvent::DragMoved {
+                    position,
+                    modifiers,
+                    data,
+                } => {
+                    update_modifiers(&self.modifiers, modifiers, &mut egui_input);
+                    let pos = self.drag_pos(position);
+                    self.pointer_logical_pos.set(Some(pos));
+                    egui_input.events.push(egui::Event::PointerMoved(pos));
+                    egui_input.hovered_files = drop_paths(data)
+                        .into_iter()
+                        .map(|path| egui::HoveredFile {
+                            path: Some(path),
+                            ..Default::default()
+                        })
+                        .collect();
+                    if !egui_input.hovered_files.is_empty() {
+                        accept_drop = Some(EventStatus::AcceptDrop(DropEffect::Copy));
+                    }
+                }
+                baseview::MouseEvent::DragLeft => {
+                    egui_input.hovered_files.clear();
+                    self.pointer_logical_pos.set(None);
+                    egui_input.events.push(egui::Event::PointerGone);
+                }
+                baseview::MouseEvent::DragDropped {
+                    position,
+                    modifiers,
+                    data,
+                } => {
+                    update_modifiers(&self.modifiers, modifiers, &mut egui_input);
+                    let pos = self.drag_pos(position);
+                    self.pointer_logical_pos.set(Some(pos));
+                    egui_input.events.push(egui::Event::PointerMoved(pos));
+                    egui_input.hovered_files.clear();
+                    let paths = drop_paths(data);
+                    if !paths.is_empty() {
+                        accept_drop = Some(EventStatus::AcceptDrop(DropEffect::Copy));
+                    }
+                    egui_input
+                        .dropped_files
+                        .extend(paths.into_iter().map(|path| {
+                            Arc::new(NativeFile(path)) as egui::DroppedFileHandle
+                        }));
                 }
                 _ => do_repaint = false,
             },
@@ -952,7 +1013,9 @@ impl<A: App> WindowHandler for EguiWindow<A> {
             }
             baseview::Event::Mouse(_) => {
                 let egui_ctx = &self.inner.borrow().egui_ctx;
-                if egui_ctx.egui_is_using_pointer() || egui_ctx.egui_wants_pointer_input() {
+                if let Some(status) = accept_drop {
+                    status
+                } else if egui_ctx.egui_is_using_pointer() || egui_ctx.egui_wants_pointer_input() {
                     EventStatus::Captured
                 } else {
                     EventStatus::Ignored
@@ -983,4 +1046,26 @@ fn is_paste_command(modifiers: egui::Modifiers, keycode: keyboard_types::Code) -
         || (cfg!(target_os = "windows")
             && modifiers.shift
             && keycode == keyboard_types::Code::Insert)
+}
+
+/// The files in a drag and drop payload. (Klopfer patch)
+fn drop_paths(data: &DropData) -> Vec<std::path::PathBuf> {
+    match data {
+        DropData::Files(paths) => paths.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// A file dropped from the file manager, for egui's `dropped_files`. (Klopfer patch)
+#[derive(Debug)]
+struct NativeFile(std::path::PathBuf);
+
+impl egui::DroppedFile for NativeFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
 }
